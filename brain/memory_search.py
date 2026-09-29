@@ -1,23 +1,38 @@
-"""Agentic OS — Persistent Memory with SQLite FTS5
+"""Agentic OS / Sirius Dev Station — Persistent Memory with SQLite FTS5
 
-Full-text search across brain files, skills, journal, and prompts.
-Auto-indexes text content on startup and provides search + entity extraction.
+Full-text search across Sirius .context files, BMAD skills, journal, and prompts.
+Auto-indexes text content on startup and provides search + knowledge graph extraction.
 """
 import json
+import os
 import re
 import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).parent.resolve()
+load_dotenv(BASE_DIR.parent / ".env")
+
+SIRIUS_ROOT_ENV = os.environ.get("SIRIUS_ROOT")
+if SIRIUS_ROOT_ENV:
+    SIRIUS_ROOT = Path(SIRIUS_ROOT_ENV).resolve()
+else:
+    sibling = (BASE_DIR.parent.parent / "sirius").resolve()
+    SIRIUS_ROOT = sibling if sibling.exists() else BASE_DIR.parent
+
+SIRIUS_CONTEXT = SIRIUS_ROOT / ".context"
+SIRIUS_SKILLS = SIRIUS_ROOT / ".agents" / "skills"
+
 DB_PATH = BASE_DIR.parent / "data" / "memory.db"
 
 _local = threading.local()
 
 def _get_db():
     if not hasattr(_local, "conn") or _local.conn is None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         _local.conn = sqlite3.connect(str(DB_PATH))
         _local.conn.row_factory = sqlite3.Row
     return _local.conn
@@ -84,10 +99,10 @@ def search(query: str, limit: int = 20) -> list:
     return [dict(r) for r in rows]
 
 def build_graph() -> dict:
-    """Build a knowledge graph from the FTS5 index + entity table (v0.4.0).
+    """Build a knowledge graph from the FTS5 index + entity table.
 
-    Nodes: brain files, skills, journal entries, extracted entities.
-    Edges: file->entity co-occurrence, entity co-occurrence in same source.
+    Nodes: Sirius .context documents, BMAD skills, journal entries, extracted entities.
+    Edges: document->entity co-occurrence, cross-references.
     """
     conn = _get_db()
     nodes, edges = [], []
@@ -132,57 +147,99 @@ def build_graph() -> dict:
     edge_rows = conn.execute(
         "SELECT source, name, type FROM entities LIMIT 500"
     ).fetchall()
-    ent_by_key = {}
     for e in edge_rows:
-        key = f"ent:{e['name']}:{e['type']}"
-        ent_by_key.setdefault(e["source"], []).append(key)
+        target_id = f"ent:{e['name']}:{e['type']}"
+        for doc_id, path in doc_by_id.items():
+            if e["source"] and (e["source"] in path or path in e["source"]):
+                edge_key = f"{doc_id}->{target_id}"
+                if edge_key not in edge_keys:
+                    edge_keys.add(edge_key)
+                    edges.append({
+                        "source": doc_id,
+                        "target": target_id,
+                        "type": "mentions",
+                        "weight": 1,
+                    })
 
-    # Edges between documents (same source directory / shared entity)
-    doc_sources = {}
+    # Category clustering edges (connect documents in same category, e.g. architecture)
+    cat_docs = {}
     for r in rows:
-        doc_sources.setdefault(r["source"], []).append(r["id"])
+        cat_docs.setdefault(r["category"], []).append(r["id"])
+    for cat, ids in cat_docs.items():
+        if len(ids) > 1 and cat in ("architecture", "business-rule", "decision", "feature"):
+            for i in range(len(ids) - 1):
+                edge_key = f"{ids[i]}<->{ids[i+1]}"
+                if edge_key not in edge_keys:
+                    edge_keys.add(edge_key)
+                    edges.append({
+                        "source": ids[i],
+                        "target": ids[i+1],
+                        "type": "same_category",
+                        "weight": 0.5,
+                    })
 
-    for source, ids in doc_sources.items():
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                key = tuple(sorted((ids[i], ids[j])))
-                if key not in edge_keys:
-                    edge_keys.add(key)
-                    edges.append({"source": ids[i], "target": ids[j], "type": "shares_source"})
-
-    for source, ent_ids in ent_by_key.items():
-        # link each entity to the document it appeared in
-        for doc_id, doc_path in doc_by_id.items():
-            if doc_path and source and doc_path in source:
-                key = (doc_id, ent_ids[0])
-                if key not in edge_keys:
-                    edge_keys.add(key)
-                    for ent_id in ent_ids[:5]:
-                        edges.append({"source": doc_id, "target": ent_id, "type": "mentions"})
-
-    return {"nodes": nodes, "edges": edges,
-            "stats": {"nodes": len(nodes), "edges": len(edges)}}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "stats": {
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "documents": len(rows),
+            "entities": len(entity_ids),
+        },
+    }
 
 def index_brain_files():
+    # 1. Index Sirius .context documents
+    if SIRIUS_CONTEXT.exists():
+        for cat in ["architecture", "business-rule", "decision", "feature", "component"]:
+            cat_dir = SIRIUS_CONTEXT / cat
+            if cat_dir.exists():
+                for f in sorted(cat_dir.glob("*.md")):
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                    title = f.stem.replace("-", " ").replace("_", " ").title()
+                    for line in content.splitlines():
+                        if line.startswith("title:"):
+                            title = line.split("title:", 1)[1].strip().strip('"\'')
+                            break
+                        elif line.startswith("# "):
+                            title = line[2:].strip()
+                            break
+                    rel_path = f".context/{cat}/{f.name}"
+                    index_text("sirius-context", rel_path, title, content, cat)
+    
+    # 2. Local brain documents
     brain_dir = BASE_DIR
-    for f in brain_dir.glob("*.md"):
-        content = f.read_text(encoding="utf-8")
+    for f in sorted(brain_dir.glob("*.md")):
+        content = f.read_text(encoding="utf-8", errors="replace")
         title = f.stem.replace("-", " ").replace("_", " ").title()
-        index_text("brain", str(f.relative_to(BASE_DIR.parent)), title, content, "brain")
+        index_text("brain", f"brain/{f.name}", title, content, "brain")
 
 def index_skills():
-    skills_dir = BASE_DIR.parent / "skills"
-    for d in sorted(skills_dir.iterdir()):
-        if d.is_dir() and not d.name.startswith("_"):
-            for f in d.glob("*.md"):
-                content = f.read_text(encoding="utf-8")
-                index_text("skill", str(f.relative_to(BASE_DIR.parent)), f"{d.name}/{f.stem}", content, "skill")
+    # Index Sirius BMAD skills
+    if SIRIUS_SKILLS.exists():
+        for d in sorted(SIRIUS_SKILLS.iterdir()):
+            if d.is_dir() and not d.name.startswith(("_", ".")):
+                skill_md = d / "SKILL.md"
+                if skill_md.exists():
+                    content = skill_md.read_text(encoding="utf-8", errors="replace")
+                    rel_path = f".agents/skills/{d.name}/SKILL.md"
+                    index_text("sirius-skill", rel_path, f"Skill: {d.name}", content, "skill")
+    else:
+        # Fallback to local skills
+        skills_dir = BASE_DIR.parent / "skills"
+        if skills_dir.exists():
+            for d in sorted(skills_dir.iterdir()):
+                if d.is_dir() and not d.name.startswith(("_", ".")):
+                    for f in d.glob("*.md"):
+                        content = f.read_text(encoding="utf-8", errors="replace")
+                        index_text("skill", str(f.relative_to(BASE_DIR.parent)), f"{d.name}/{f.stem}", content, "skill")
 
 def index_journal():
     journal_dir = BASE_DIR / "journal"
     if journal_dir.exists():
         for f in sorted(journal_dir.glob("*.md")):
-            content = f.read_text(encoding="utf-8")
+            content = f.read_text(encoding="utf-8", errors="replace")
             index_text("journal", str(f.relative_to(BASE_DIR.parent)), f"Journal {f.stem}", content, "journal")
 
 def reindex_all():
@@ -236,6 +293,9 @@ def get_entities(entity_type: str = "", limit: int = 50) -> list:
         ).fetchall()
     return [dict(r) for r in rows]
 
-
-# Initialize on import
+# Initialize and reindex if empty
 init_db()
+conn = _get_db()
+row_count = conn.execute("SELECT COUNT(*) FROM memory_meta").fetchone()[0]
+if row_count == 0:
+    reindex_all()

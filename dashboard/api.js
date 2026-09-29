@@ -27,12 +27,13 @@ const api = {
     return r.json();
   },
   getStatus: () => api.get('/api/status'),
+  getRepos: () => api.get('/api/repos'),
   getBrain: () => api.get('/api/brain'),
   getBrainFile: (name) => api.get(`/api/brain/${encodeURIComponent(name)}`),
   updateBrainFile: (name, content) => api.put(`/api/brain/${encodeURIComponent(name)}`, { content }),
   getSkills: () => api.get('/api/skills'),
   getSkill: (name) => api.get(`/api/skills/${encodeURIComponent(name)}`),
-  runSkill: (name, input = '', agent = 'auto') => api.post(`/api/skills/${encodeURIComponent(name)}/run`, { input, agent }),
+  runSkill: (name, input = '', agent = 'auto', repo = 'sirius') => api.post(`/api/skills/${encodeURIComponent(name)}/run`, { input, agent, repo }),
   getSkillEval: (name) => api.get(`/api/skills/${encodeURIComponent(name)}/eval`),
   getJobs: () => api.get('/api/scheduler/jobs'),
   createJob: (job) => api.post('/api/scheduler/jobs', job),
@@ -50,11 +51,12 @@ const api = {
   updateSettings: (settings) => api.put('/api/settings', { settings }),
   getStandards: () => api.get('/api/standards'),
   discoverStandards: () => api.post('/api/standards/discover'),
-  chat: (agent, message, controller) => api.post('/api/chat', { agent, message }, controller),
-  chatWithFile: async (agent, message, file, controller) => {
+  chat: (agent, message, controller, repo = 'sirius') => api.post('/api/chat', { agent, message, repo }, controller),
+  chatWithFile: async (agent, message, file, controller, repo = 'sirius') => {
     const form = new FormData();
     form.append('agent', agent);
     form.append('message', message || '');
+    form.append('repo', repo);
     form.append('file', file);
     const opts = { method: 'POST', body: form };
     if (controller) opts.signal = controller.signal;

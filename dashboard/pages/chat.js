@@ -35,6 +35,13 @@ async function renderChat() {
             <div class="chat-agent-desc">Research & Analysis</div>
           </div>
         </div>
+        <div class="chat-agents-label" style="margin-top:16px">Target Repo</div>
+        <select id="chatRepoSelector" class="form-select" style="width:100%;margin-top:6px;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;font-size:12px">
+          <option value="sirius">sirius (Root / Context)</option>
+          <option value="sirius-mcp">sirius-mcp (TypeScript / MCP)</option>
+          <option value="sirius-api">sirius-api (Java 21 / Spring)</option>
+          <option value="sirius-landing">sirius-landing (Next.js 15)</option>
+        </select>
         <div style="margin-top:auto;padding:12px;font-size:11px;color:var(--text-muted);border-top:1px solid var(--border)">
           <div id="chatAgentStatus">opencode • ready</div>
         </div>
@@ -138,22 +145,23 @@ async function sendChatMessage() {
   // Client-side timeout: 200s (slightly more than Hermes' 180s backend timeout)
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 200000);
+  const repo = document.getElementById('chatRepoSelector')?.value || 'sirius';
 
   try {
     let r;
     if (file) {
-      r = await api.chatWithFile(agent, message, file, controller);
+      r = await api.chatWithFile(agent, message, file, controller, repo);
       clearChatAttachment();
     } else {
-      r = await api.chat(agent, message, controller);
+      r = await api.chat(agent, message, controller, repo);
     }
     clearTimeout(timeoutId);
     removeTypingIndicator(typingId);
     addChatMessage('assistant', r.response.content, agent);
 
     // Store in local history
-    window._chatHistory.push({ role: 'user', content: message || `📎 ${file.name}`, agent });
-    window._chatHistory.push({ role: 'assistant', content: r.response.content, agent });
+    window._chatHistory.push({ role: 'user', content: message || `📎 ${file.name}`, agent, repo });
+    window._chatHistory.push({ role: 'assistant', content: r.response.content, agent, repo });
   } catch (err) {
     removeTypingIndicator(typingId);
     const msg = err.name === 'AbortError' ? 'Request timed out after 200s' : err.message;

@@ -155,6 +155,15 @@ async function quickRunSkill(encodedName) {
       <textarea id="qrsInput" class="form-textarea" rows="3" placeholder="Enter input for ${displayName}..."></textarea>
     </div>
     <div class="form-group">
+      <label class="form-label">Target Repository</label>
+      <select id="qrsRepo" class="form-select">
+        <option value="sirius">sirius (Root / Context)</option>
+        <option value="sirius-mcp">sirius-mcp (TypeScript / MCP)</option>
+        <option value="sirius-api">sirius-api (Java 21 / Spring)</option>
+        <option value="sirius-landing">sirius-landing (Next.js 15)</option>
+      </select>
+    </div>
+    <div class="form-group">
       <label class="form-label">Agent</label>
       <select id="qrsAgent" class="form-select">
         <option value="auto">Auto-detect</option>
@@ -174,6 +183,7 @@ async function executeSkillRun(encodedName) {
   const name = decodeURIComponent(encodedName);
   const input = document.getElementById('qrsInput').value;
   const agent = document.getElementById('qrsAgent').value;
+  const repo = document.getElementById('qrsRepo')?.value || 'sirius';
   const runBtn = document.querySelector('#modalContainer .btn-primary');
   const resultArea = document.getElementById('skillResult');
 
@@ -184,7 +194,7 @@ async function executeSkillRun(encodedName) {
   }
 
   try {
-    const r = await api.runSkill(name, input, agent);
+    const r = await api.runSkill(name, input, agent, repo);
     if (resultArea) {
       const outputText = r.output || '(no output)';
       resultArea.innerHTML = `

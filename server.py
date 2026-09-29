@@ -82,6 +82,39 @@ app.add_middleware(NoCacheMiddleware)
 
 BASE_DIR = Path(__file__).parent.resolve()
 
+# Load .env configuration
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except Exception:
+    pass
+
+SIRIUS_ROOT_ENV = os.environ.get("SIRIUS_ROOT")
+if SIRIUS_ROOT_ENV:
+    SIRIUS_ROOT = Path(SIRIUS_ROOT_ENV).resolve()
+else:
+    sibling = (BASE_DIR.parent / "sirius").resolve()
+    SIRIUS_ROOT = sibling if sibling.exists() else BASE_DIR
+
+SIRIUS_CONTEXT = SIRIUS_ROOT / ".context"
+SIRIUS_SKILLS = SIRIUS_ROOT / ".agents" / "skills"
+SIRIUS_BMAD = SIRIUS_ROOT / "_bmad-output"
+SIRIUS_DB_PATH = SIRIUS_CONTEXT / ".index" / "sirius.db"
+
+SIRIUS_REPOS = {
+    "root": SIRIUS_ROOT,
+    "sirius": SIRIUS_ROOT,
+    "sirius-mcp": SIRIUS_ROOT / "sirius-mcp",
+    "sirius-api": SIRIUS_ROOT / "sirius-api",
+    "sirius-landing": SIRIUS_ROOT / "sirius-landing",
+}
+
+def resolve_repo_cwd(repo: Optional[str] = "sirius") -> Path:
+    if not repo:
+        return SIRIUS_ROOT
+    clean_repo = repo.lower().strip()
+    return SIRIUS_REPOS.get(clean_repo, SIRIUS_ROOT)
+
 # ─── Models ───────────────────────────────────────────────────────
 
 class BrainUpdate(BaseModel):
@@ -90,6 +123,7 @@ class BrainUpdate(BaseModel):
 class SkillRunRequest(BaseModel):
     input: Optional[str] = ""
     agent: Optional[str] = "auto"
+    repo: Optional[str] = "sirius"
 
 class ScheduleJobRequest(BaseModel):
     name: str
@@ -106,6 +140,8 @@ class BackupRestoreRequest(BaseModel):
 class ChatRequest(BaseModel):
     agent: str
     message: str
+    repo: Optional[str] = "sirius"
+
 
 # ─── Helper Functions ─────────────────────────────────────────────
 
@@ -220,68 +256,164 @@ def check_agent(name: str) -> dict:
 @app.get("/api/status")
 def get_status():
     agents = [check_agent(a) for a in ["opencode", "hermes", "agy"]]
-    skills_dir = BASE_DIR / "skills"
+    skills_dir = SIRIUS_SKILLS if SIRIUS_SKILLS.exists() else (BASE_DIR / "skills")
     skills = [d.name for d in skills_dir.iterdir()
-              if d.is_dir() and not d.name.startswith("_")] if skills_dir.exists() else []
+              if d.is_dir() and not d.name.startswith(("_", "."))] if skills_dir.exists() else []
+
+    repos_status = {}
+    for repo_key, repo_path in SIRIUS_REPOS.items():
+        if repo_key != "root":
+            repos_status[repo_key] = {
+                "exists": repo_path.exists(),
+                "path": str(repo_path),
+                "has_git": (repo_path / ".git").exists(),
+            }
+
+    context_count = 0
+    if SIRIUS_CONTEXT.exists():
+        for cat in ["architecture", "business-rule", "decision", "feature", "component"]:
+            p = SIRIUS_CONTEXT / cat
+            if p.exists():
+                context_count += len(list(p.glob("*.md")))
+
     return {
         "status": "healthy",
+        "sirius_root": str(SIRIUS_ROOT),
+        "context_exists": SIRIUS_CONTEXT.exists(),
+        "context_count": context_count,
+        "repos": repos_status,
         "agents": agents,
         "skills_count": len(skills),
         "uptime": time.time(),
     }
 
-# ─── Routes: Brain ────────────────────────────────────────────────
+# ─── Routes: Repositories ─────────────────────────────────────────
+
+@app.get("/api/repos")
+def list_sirius_repos():
+    repos = []
+    for key, path in SIRIUS_REPOS.items():
+        if key != "root":
+            repos.append({
+                "id": key,
+                "name": key,
+                "path": str(path),
+                "exists": path.exists(),
+                "has_git": (path / ".git").exists(),
+            })
+    return {"repos": repos, "sirius_root": str(SIRIUS_ROOT)}
+
+# ─── Routes: Brain / Context ──────────────────────────────────────
+
+def get_brain_file_path(file_path: str) -> Optional[Path]:
+    # Clean and validate
+    clean_path = file_path.strip().replace("\\", "/").lstrip("/")
+    if ".." in clean_path:
+        return None
+    # 1. Try in SIRIUS_CONTEXT
+    if SIRIUS_CONTEXT.exists():
+        target = (SIRIUS_CONTEXT / clean_path).resolve()
+        if str(target).startswith(str(SIRIUS_CONTEXT.resolve())) and target.exists() and target.is_file():
+            return target
+    # 2. Try in local brain
+    target = (BASE_DIR / "brain" / clean_path).resolve()
+    if str(target).startswith(str((BASE_DIR / "brain").resolve())) and target.exists() and target.is_file():
+        return target
+    return None
 
 @app.get("/api/brain")
 def list_brain():
-    brain_dir = BASE_DIR / "brain"
-    if not brain_dir.exists():
-        return {}
-    files = sorted([p.name for p in brain_dir.iterdir() if p.name.endswith(".md") and p.is_file()])
     brain_data = {}
-    for f in files:
-        path = brain_dir / f
-        brain_data[f] = read_file(path)
+    # 1. Sirius .context files (SSoT)
+    if SIRIUS_CONTEXT.exists():
+        for cat in ["architecture", "business-rule", "decision", "feature", "component"]:
+            cat_dir = SIRIUS_CONTEXT / cat
+            if cat_dir.exists():
+                for f in sorted(cat_dir.glob("*.md")):
+                    rel_name = f"{cat}/{f.name}"
+                    brain_data[rel_name] = read_file(f)
+    # 2. Local dev station brain files
+    local_brain = BASE_DIR / "brain"
+    if local_brain.exists():
+        for f in sorted(local_brain.glob("*.md")):
+            if f.name not in brain_data:
+                brain_data[f.name] = read_file(f)
     return brain_data
 
-@app.get("/api/brain/{file_name}")
-def get_brain_file(file_name: str):
-    if ".." in file_name or "/" in file_name:
-        raise HTTPException(400, "Invalid file name")
-    path = BASE_DIR / "brain" / file_name
-    if not path.exists() or path.is_dir():
-        raise HTTPException(404, "File not found")
-    return {"name": file_name, "content": read_file(path)}
+@app.get("/api/brain/{file_path:path}")
+def get_brain_file(file_path: str):
+    target = get_brain_file_path(file_path)
+    if not target:
+        raise HTTPException(404, f"File '{file_path}' not found in Sirius context or local brain")
+    return {"name": file_path, "content": read_file(target)}
 
-@app.put("/api/brain/{file_name}")
-def update_brain_file(file_name: str, data: BrainUpdate):
-    if ".." in file_name or "/" in file_name:
-        raise HTTPException(400, "Invalid file name")
-    path = BASE_DIR / "brain" / file_name
-    write_file(path, data.content)
-    append_audit({"action": "brain_update", "file": file_name})
-    return {"status": "ok", "file": file_name}
+@app.put("/api/brain/{file_path:path}")
+def update_brain_file(file_path: str, data: BrainUpdate):
+    clean_path = file_path.strip().replace("\\", "/").lstrip("/")
+    if ".." in clean_path:
+        raise HTTPException(400, "Invalid file path")
+    target = get_brain_file_path(clean_path)
+    if not target:
+        # Create in SIRIUS_CONTEXT if categorized path, or local brain
+        if "/" in clean_path and SIRIUS_CONTEXT.exists():
+            target = (SIRIUS_CONTEXT / clean_path).resolve()
+            if not str(target).startswith(str(SIRIUS_CONTEXT.resolve())):
+                raise HTTPException(400, "Invalid path")
+        else:
+            target = (BASE_DIR / "brain" / clean_path).resolve()
+            if not str(target).startswith(str((BASE_DIR / "brain").resolve())):
+                raise HTTPException(400, "Invalid path")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_file(target, data.content)
+    append_audit({"action": "brain_update", "file": clean_path})
+    return {"status": "ok", "file": clean_path}
 
 # ─── Routes: Skills ───────────────────────────────────────────────
+
+def get_skills_dir() -> Path:
+    if SIRIUS_SKILLS.exists():
+        return SIRIUS_SKILLS
+    return BASE_DIR / "skills"
 
 @app.get("/api/skills")
 def list_skills():
     skills = []
-    for d in sorted((BASE_DIR / "skills").iterdir()):
-        if d.is_dir() and not d.name.startswith("_"):
+    s_dir = get_skills_dir()
+    if not s_dir.exists():
+        return []
+    for d in sorted(s_dir.iterdir()):
+        if d.is_dir() and not d.name.startswith(("_", ".")):
             skill_md = read_file(d / "SKILL.md")
-            learnings = read_file(d / "learnings.md")
-            eval_data = {}
-            eval_path = d / "eval.json"
-            if eval_path.exists():
-                eval_data = json.loads(eval_path.read_text())
-            score_history = []
-            score_path = d / "score-history.json"
-            if score_path.exists():
-                score_history = json.loads(score_path.read_text())
+            learnings_file = BASE_DIR / "data" / "skill-learnings" / d.name / "learnings.md"
+            if not learnings_file.exists():
+                learnings_file = d / "learnings.md"
+            learnings = read_file(learnings_file) if learnings_file.exists() else ""
+
+            eval_file = d / "eval.json"
+            eval_data = json.loads(eval_file.read_text(encoding="utf-8")) if eval_file.exists() else {}
+
+            score_file = BASE_DIR / "data" / "skill-learnings" / d.name / "score-history.json"
+            if not score_file.exists():
+                score_file = d / "score-history.json"
+            score_history = json.loads(score_file.read_text(encoding="utf-8")) if score_file.exists() else []
+
+            # Extract clean description from frontmatter or text
+            desc = ""
+            if skill_md:
+                if skill_md.startswith("---"):
+                    parts = skill_md.split("---", 2)
+                    if len(parts) >= 3:
+                        for line in parts[1].splitlines():
+                            if line.strip().startswith("description:"):
+                                desc = line.split("description:", 1)[1].strip().strip('"\'')
+                                break
+                if not desc:
+                    non_hash_lines = [l.strip() for l in skill_md.splitlines() if l.strip() and not l.startswith("#")]
+                    desc = non_hash_lines[0] if non_hash_lines else ""
+
             skills.append({
                 "name": d.name,
-                "description": skill_md[:200] if skill_md else "",
+                "description": desc[:250],
                 "has_learnings": bool(learnings),
                 "eval_criteria": eval_data.get("criteria", []),
                 "scores": score_history,
@@ -291,45 +423,69 @@ def list_skills():
 @app.get("/api/skills/{name}")
 def get_skill(name: str):
     validate_identifier(name, r"^[a-zA-Z0-9_-]+$", "skill name")
-    path = BASE_DIR / "skills" / name
+    s_dir = get_skills_dir()
+    path = s_dir / name
+    if not path.exists():
+        path = BASE_DIR / "skills" / name
     if not path.exists():
         raise HTTPException(404, "Skill not found")
+
+    learnings_file = BASE_DIR / "data" / "skill-learnings" / name / "learnings.md"
+    if not learnings_file.exists():
+        learnings_file = path / "learnings.md"
+    learnings = read_file(learnings_file) if learnings_file.exists() else ""
+
+    eval_file = path / "eval.json"
+    eval_data = json.loads(eval_file.read_text(encoding="utf-8")) if eval_file.exists() else {}
+
+    score_file = BASE_DIR / "data" / "skill-learnings" / name / "score-history.json"
+    if not score_file.exists():
+        score_file = path / "score-history.json"
+    score_history = json.loads(score_file.read_text(encoding="utf-8")) if score_file.exists() else []
+
+    context_files = [f.name for f in (path / "context").iterdir()] if (path / "context").exists() else []
+
     return {
         "name": name,
         "skill": read_file(path / "SKILL.md"),
-        "learnings": read_file(path / "learnings.md"),
-        "eval": json.loads((path / "eval.json").read_text()) if (path / "eval.json").exists() else {},
-        "score_history": json.loads((path / "score-history.json").read_text()) if (path / "score-history.json").exists() else [],
-        "context": [f.name for f in (path / "context").iterdir()] if (path / "context").exists() else [],
+        "learnings": learnings,
+        "eval": eval_data,
+        "score_history": score_history,
+        "context": context_files,
     }
 
 @app.post("/api/skills/{name}/run")
 def run_skill(name: str, req: Optional[SkillRunRequest] = None):
     validate_identifier(name, r"^[a-zA-Z0-9_-]+$", "skill name")
-    path = BASE_DIR / "skills" / name
+    s_dir = get_skills_dir()
+    path = s_dir / name
+    if not path.exists():
+        path = BASE_DIR / "skills" / name
     if not path.exists():
         raise HTTPException(404, "Skill not found")
 
-    agent_choice = req.agent if req else "auto"
+    agent_choice = req.agent if req and req.agent else "auto"
     skill_input = req.input if req else ""
+    target_repo = req.repo if req and req.repo else "sirius"
 
-    # Read skill files
     skill_md = read_file(path / "SKILL.md")
-    learnings = read_file(path / "learnings.md")
+    learnings_file = BASE_DIR / "data" / "skill-learnings" / name / "learnings.md"
+    if not learnings_file.exists():
+        learnings_file = path / "learnings.md"
+    learnings = read_file(learnings_file) if learnings_file.exists() else ""
 
-    # Determine which agent based on skill type
+    # Determine which agent based on BMAD personas and keywords
     if agent_choice == "auto":
-        devops_keywords = ["devops", "audit", "deploy", "k8s", "gcp", "infra", "terraform"]
-        research_keywords = ["research", "synthesis", "analyze", "search", "compare"]
-        if any(k in name for k in devops_keywords):
+        dev_keywords = ["build", "dev", "implement", "test", "tdd", "refactor", "bug", "code"]
+        research_keywords = ["research", "architecture", "spec", "prd", "review", "ux", "design", "analyst", "recon"]
+        if any(k in name for k in dev_keywords):
             agent_choice = "opencode"
         elif any(k in name for k in research_keywords):
             agent_choice = "agy"
         else:
-            # Check SKILL.md for explicit agent assignment
             for line in skill_md.split('\n'):
                 line = line.strip()
-                if "Primary:" in line:
+                if "Primary:" in line or "Agent:" in line:
                     candidate = line.split(":")[-1].strip().lower()
                     if candidate in ("opencode", "hermes", "agy"):
                         agent_choice = candidate
@@ -337,8 +493,7 @@ def run_skill(name: str, req: Optional[SkillRunRequest] = None):
             if agent_choice == "auto":
                 agent_choice = "opencode"
 
-    # Build prompt from skill instructions + learnings + user input
-    prompt = f"Execute the '{name}' skill.\n\n"
+    prompt = f"Execute the '{name}' skill on repository '{target_repo}'.\n\n"
     if skill_md:
         prompt += f"## Skill Instructions\n{skill_md}\n\n"
     if learnings and learnings.strip():
@@ -348,32 +503,35 @@ def run_skill(name: str, req: Optional[SkillRunRequest] = None):
 
     run_id = str(uuid.uuid4())[:8]
 
-    # Execute via agent
     try:
-        response_text = execute_agent(agent_choice, prompt)
+        response_text = execute_agent(agent_choice, prompt, repo=target_repo)
     except subprocess.TimeoutExpired:
-        response_text = f"⏱ Skill '{name}' timed out on agent '{agent_choice}'."
+        response_text = f"⏱ Skill '{name}' timed out on agent '{agent_choice}' (repo: {target_repo})."
     except FileNotFoundError:
         response_text = f"⚠ Agent '{agent_choice}' CLI not installed. Install it and try again."
     except Exception as e:
         response_text = f"⚠ Error executing skill: {str(e)}"
 
-    # Save output to learnings.md
+    # Save output to learnings in data/skill-learnings
+    learnings_dir = BASE_DIR / "data" / "skill-learnings" / name
+    learnings_dir.mkdir(parents=True, exist_ok=True)
+    target_learnings = learnings_dir / "learnings.md"
+    existing_learnings = read_file(target_learnings)
     timestamp = get_timestamp()[:10]
-    existing = read_file(path / "learnings.md")
     new_entry = (
         f"\n## {timestamp} (Run {run_id})\n"
+        f"- Target Repo: {target_repo}\n"
         f"- Agent: {agent_choice}\n"
         f"- Input: {skill_input or '(none)'}\n"
         f"- Output: {response_text[:500]}\n"
     )
-    write_file(path / "learnings.md", existing + new_entry)
+    write_file(target_learnings, existing_learnings + new_entry)
 
-    # Log execution
     append_audit({
         "action": "skill_run",
         "skill": name,
         "agent": agent_choice,
+        "repo": target_repo,
         "run_id": run_id,
         "output_preview": response_text[:100],
     })
@@ -383,17 +541,23 @@ def run_skill(name: str, req: Optional[SkillRunRequest] = None):
         "run_id": run_id,
         "skill": name,
         "agent": agent_choice,
+        "repo": target_repo,
         "output": response_text,
-        "message": f"Skill '{name}' completed via {agent_choice}",
+        "message": f"Skill '{name}' executed via {agent_choice} on {target_repo}",
     }
 
 @app.get("/api/skills/{name}/eval")
 def get_skill_eval(name: str):
     validate_identifier(name, r"^[a-zA-Z0-9_-]+$", "skill name")
-    path = BASE_DIR / "skills" / name / "score-history.json"
+    s_dir = get_skills_dir()
+    path = s_dir / name / "score-history.json"
+    if not path.exists():
+        path = BASE_DIR / "data" / "skill-learnings" / name / "score-history.json"
+    if not path.exists():
+        path = BASE_DIR / "skills" / name / "score-history.json"
     if not path.exists():
         return {"scores": []}
-    return {"scores": json.loads(path.read_text())}
+    return {"scores": json.loads(path.read_text(encoding="utf-8"))}
 
 # ─── Routes: Scheduler ────────────────────────────────────────────
 
@@ -821,9 +985,30 @@ def save_chat_message(msg: dict):
         history["messages"] = history["messages"][-200:]
     CHAT_HISTORY_FILE.write_text(json.dumps(history, indent=2))
 
-def run_cli(args: list, timeout: int = 30) -> tuple:
-    r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-    return r.returncode, r.stdout, r.stderr
+def run_cli(args: list, timeout: int = 60, cwd: Optional[Path] = None) -> tuple:
+    if not args:
+        return 1, "", "Empty command"
+    exe = args[0]
+    resolved = shutil.which(exe)
+    if resolved:
+        args[0] = resolved
+    is_windows = os.name == "nt"
+    use_shell = is_windows and (resolved.lower().endswith(('.cmd', '.bat')) if resolved else True)
+    target_cwd = cwd if (cwd and cwd.exists()) else BASE_DIR
+    try:
+        r = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(target_cwd),
+            shell=use_shell
+        )
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        raise
+    except Exception as e:
+        return 1, "", str(e)
 
 def clean_hermes_output(raw: str) -> str:
     """Strip CLI metadata from Hermes output, returning only the AI response."""
@@ -850,13 +1035,14 @@ def clean_hermes_output(raw: str) -> str:
     non_meta = [l.strip() for l in lines if l.strip() and not l.startswith(('Query:', 'Initializing', '──', 'Resume', 'Session:', 'Duration:', 'Messages:'))]
     return '\n'.join(non_meta[-5:]) or raw
 
-def execute_agent(agent: str, message: str) -> str:
+def execute_agent(agent: str, message: str, repo: str = "sirius") -> str:
+    cwd = resolve_repo_cwd(repo)
     try:
         if agent == "opencode":
             try:
-                code, out, err = run_cli(["opencode", "run", "--format", "json", message], timeout=30)
+                code, out, err = run_cli(["opencode", "run", "--format", "json", message], timeout=90, cwd=cwd)
             except subprocess.TimeoutExpired:
-                return f"⏱ Agent 'opencode' timed out.\n\nOpenCode's model is taking too long. Try running `opencode run \"{message[:60]}\"` directly in your terminal.\n\n**Message:** {message[:100]}"
+                return f"⏱ Agent 'opencode' timed out on repo '{repo}'.\n\nTry running `opencode run \"{message[:60]}\"` directly in your terminal at `{cwd}`."
             if code == 0:
                 response_text = ""
                 for line in (out or "").split('\n'):
@@ -873,34 +1059,31 @@ def execute_agent(agent: str, message: str) -> str:
                         continue
                 if response_text:
                     return response_text.strip()
-                return f"**opencode**\n\nProcessed your message.\n\n**Message:** {message[:100]}"
+                return f"**opencode** (in {repo})\n\nProcessed your message.\n\n**Message:** {message[:100]}"
             err_msg = (err or "").strip()
             return err_msg or f"opencode returned exit code {code}"
 
         elif agent == "hermes":
+            if not shutil.which("hermes"):
+                return f"**Hermes Agent is not installed on this machine.**\n\nFor Sirius development, use **opencode** (for coding, testing, build) or **agy** (for architecture, research, planning)."
             try:
-                code, out, err = run_cli(["hermes", "chat", "-q", message], timeout=180)
+                code, out, err = run_cli(["hermes", "chat", "-q", message], timeout=180, cwd=cwd)
             except subprocess.TimeoutExpired:
-                return f"⏱ Hermes timed out.\n\nThe model took too long to respond. Try a shorter query or check your OpenRouter rate limits.\n\n**Message:** {message[:100]}"
+                return f"⏱ Hermes timed out.\n\nThe model took too long to respond."
             if code == 0:
                 cleaned = clean_hermes_output(out or "")
-                if cleaned:
-                    return cleaned
-                # Empty response from model - return useful fallback
-                return f"**Hermes**\n\nReceived your message but the model returned an empty response. Try rephrasing your query.\n\n**Message:** {message}"
+                return cleaned or f"**Hermes**\n\nReceived response from model."
             err_msg = (err or "").strip()
-            if "invalid choice" in err_msg or "usage:" in err_msg:
-                return f"**Hermes needs setup**\n\nRun `hermes setup` or check your config.\n\n**Details:** {err_msg[:200]}"
             return err_msg or f"hermes returned exit code {code}"
 
         elif agent == "agy":
             try:
-                code, out, err = run_cli(["agy", "--print", message], timeout=60)
+                code, out, err = run_cli(["agy", "--print", message], timeout=120, cwd=cwd)
             except subprocess.TimeoutExpired:
-                return f"**agy timed out.**\n\nTry running `agy --print \"{message[:60]}\"` directly."
+                return f"**agy timed out.**\n\nTry running `agy --print \"{message[:60]}\"` directly in `{cwd}`."
             combined = ((err or "") + " " + (out or "")).strip()
             if code == 0:
-                return (out or "").strip() or f"**agy**\n\nProcessed your query."
+                return (out or "").strip() or f"**agy** (in {repo})\n\nProcessed your query."
             if "auth" in combined.lower() or "login" in combined.lower() or "api key" in combined.lower():
                 return f"**agy needs auth**\n\nRun `agy login` to authenticate.\n\n**Details:** {combined[:200]}"
             return combined or f"agy returned exit code {code}"
@@ -908,9 +1091,9 @@ def execute_agent(agent: str, message: str) -> str:
         else:
             return f"Unknown agent: {agent}"
     except subprocess.TimeoutExpired:
-        return f"⏱ Agent '{agent}' timed out.\n\nRun `{agent} --help` in your terminal for CLI usage.\n\n**Message:** {message[:100]}"
+        return f"⏱ Agent '{agent}' timed out on repo '{repo}'."
     except FileNotFoundError:
-        return f"⚠ Agent '{agent}' CLI not installed. Install it and try again."
+        return f"⚠ Agent '{agent}' CLI not found on PATH."
     except Exception as e:
         return f"⚠ Error communicating with {agent}: {str(e)}"
 
@@ -925,27 +1108,30 @@ def chat(req: ChatRequest):
     if len(message) > 10000:
         raise HTTPException(400, "Message too long (max 10000 characters)")
 
+    target_repo = req.repo or "sirius"
     user_msg = {
         "id": str(uuid.uuid4())[:8],
         "role": "user",
         "agent": agent,
+        "repo": target_repo,
         "content": message,
         "timestamp": get_timestamp(),
     }
     save_chat_message(user_msg)
 
-    response_text = execute_agent(agent, message)
+    response_text = execute_agent(agent, message, repo=target_repo)
 
     agent_msg = {
         "id": str(uuid.uuid4())[:8],
         "role": "assistant",
         "agent": agent,
+        "repo": target_repo,
         "content": response_text,
         "timestamp": get_timestamp(),
     }
     save_chat_message(agent_msg)
 
-    append_audit({"action": "chat_message", "agent": agent, "msg_preview": message[:50]})
+    append_audit({"action": "chat_message", "agent": agent, "repo": target_repo, "msg_preview": message[:50]})
 
     return {"status": "ok", "response": agent_msg}
 
@@ -990,6 +1176,7 @@ def _cleanup_uploads(force: bool = False):
 async def chat_upload(
     agent: str = Form(...),
     message: str = Form(""),
+    repo: str = Form("sirius"),
     file: UploadFile = File(...),
 ):
     """Chat with an optional file attachment (multipart/form-data, v0.4.0)."""
@@ -1028,20 +1215,22 @@ async def chat_upload(
         "id": str(uuid.uuid4())[:8],
         "role": "user",
         "agent": agent,
+        "repo": repo,
         "content": full_message,
         "timestamp": get_timestamp(),
     }
     save_chat_message(user_msg)
-    response_text = execute_agent(agent, full_message)
+    response_text = execute_agent(agent, full_message, repo=repo)
     agent_msg = {
         "id": str(uuid.uuid4())[:8],
         "role": "assistant",
         "agent": agent,
+        "repo": repo,
         "content": response_text,
         "timestamp": get_timestamp(),
     }
     save_chat_message(agent_msg)
-    append_audit({"action": "chat_message", "agent": agent, "msg_preview": (message or filename)[:50]})
+    append_audit({"action": "chat_message", "agent": agent, "repo": repo, "msg_preview": (message or filename)[:50]})
     return {"status": "ok", "response": agent_msg, "file": filename, "saved_as": safe_name}
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1501,9 +1690,15 @@ def refresh_agent_health():
 # ─── Routes: Smart Router (2 endpoints) ─────────────────────────
 
 ROUTER_RULES = {
-    "opencode": ["code", "devops", "deploy", "git", "file", "terraform", "docker", "test", "build", "infra", "script"],
+    "opencode": [
+        "code", "devops", "deploy", "git", "file", "test", "build", "infra", "script",
+        "implement", "amelia", "dev", "spring", "java", "typescript", "nextjs", "react", "bug", "fix"
+    ],
+    "agy": [
+        "research", "analyze", "architecture", "winston", "design", "ux", "sally", "prd",
+        "spec", "john", "mary", "analyst", "review", "pre-mortem", "critique", "invariants"
+    ],
     "hermes": ["memory", "schedule", "channel", "skill", "cron", "reminder", "brain", "plugin", "backup"],
-    "agy": ["research", "analyze", "search", "compare", "explain", "study", "learn", "document", "report", "review"],
 }
 
 @app.post("/api/router/suggest")
@@ -1648,23 +1843,20 @@ DIFF_ALLOWED_PREFIXES = (
 )
 
 @app.get("/api/diff")
-def get_diff(file: str = Query(""), ref: str = Query("HEAD")):
-    """Unified git diff for a file in the repo (v0.4.0)."""
+def get_diff(file: str = Query(""), ref: str = Query("HEAD"), repo: str = Query("sirius")):
+    """Unified git diff for a file in the selected repo."""
     try:
         if not file:
             raise HTTPException(400, "Query parameter 'file' is required")
-        # Prevent traversal — allow only repo-relative paths
-        resolved = (BASE_DIR / file).resolve()
-        if not str(resolved).startswith(str(BASE_DIR.resolve()) + os.sep) and resolved != BASE_DIR:
+        target_dir = resolve_repo_cwd(repo)
+        resolved = (target_dir / file).resolve()
+        if not str(resolved).startswith(str(target_dir.resolve())):
             raise HTTPException(400, "Invalid file path")
-        if not resolved.exists():
-            raise HTTPException(404, "File not found")
-        rel = str(resolved.relative_to(BASE_DIR))
-        code, out, err = run_cli(["git", "-C", str(BASE_DIR), "diff", ref, "--", rel], timeout=10)
+        rel = str(resolved.relative_to(target_dir)) if resolved.exists() else file
+        code, out, err = run_cli(["git", "-C", str(target_dir), "diff", ref, "--", rel], timeout=15)
         if code == 0 and not out.strip():
-            # no diff against ref — try working tree vs index
-            return {"file": rel, "diff": "", "changed": False, "ref": ref}
-        return {"file": rel, "diff": out or err, "changed": bool(out.strip()), "ref": ref}
+            return {"file": rel, "diff": "", "changed": False, "ref": ref, "repo": repo}
+        return {"file": rel, "diff": out or err, "changed": bool(out.strip()), "ref": ref, "repo": repo}
     except HTTPException:
         raise
     except Exception as e:
