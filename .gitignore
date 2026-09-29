@@ -20,3 +20,4 @@ data/memory.db
 data/kanban/*.json
 data/uploads/
 scheduler/*.pyc
+.context/

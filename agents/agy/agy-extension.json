@@ -1,7 +1,8 @@
 {
   "name": "agy-extension",
   "version": "1.0.0",
-  "description": "agy (Antigravity) CLI extension for Agentic OS",
-  "model": "agy",
-  "capabilities": ["web_search", "multi_modal", "data_analysis", "document_understanding", "reasoning"]
+  "description": "agy (Antigravity) CLI extension for Sirius Dev Station",
+  "model": "gemini-3.8-flash-high",
+  "effort": "high",
+  "capabilities": ["web_search", "multi_modal", "data_analysis", "document_understanding", "reasoning", "architecture", "bmad_planning"]
 }

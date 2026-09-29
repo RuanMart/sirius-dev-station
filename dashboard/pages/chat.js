@@ -29,10 +29,10 @@ async function renderChat() {
           </div>
         </div>
         <div class="chat-agent" data-agent="agy" onclick="selectAgent('agy')">
-          <div class="agent-dot offline"></div>
+          <div class="agent-dot online"></div>
           <div>
             <div class="chat-agent-name">agy (Antigravity)</div>
-            <div class="chat-agent-desc">Research & Analysis</div>
+            <div class="chat-agent-desc">Gemini 3.8 Flash (High)</div>
           </div>
         </div>
         <div class="chat-agents-label" style="margin-top:16px">Target Repo</div>

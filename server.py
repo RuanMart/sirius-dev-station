@@ -246,17 +246,22 @@ def check_agent(name: str) -> dict:
         if name == "opencode":
             exists = shutil.which("opencode") is not None
             status = "online" if exists else "offline"
+            model = "deepseek-v4-flash-free"
         elif name == "hermes":
             exists = shutil.which("hermes") is not None
             status = "online" if exists else "offline"
+            model = "configured (Hermes)"
         elif name == "agy":
             exists = shutil.which("agy") is not None
             status = "online" if exists else "offline"
+            model = "gemini-3.8-flash-high"
         else:
             status = "offline"
+            model = "unknown"
     except Exception:
         status = "offline"
-    return {"name": name, "status": status}
+        model = "unknown"
+    return {"name": name, "status": status, "model": model}
 
 # ─── Routes: Status ───────────────────────────────────────────────
 
@@ -1086,9 +1091,13 @@ def execute_agent(agent: str, message: str, repo: str = "sirius") -> str:
 
         elif agent == "agy":
             try:
-                code, out, err = run_cli(["agy", "--print", message], timeout=120, cwd=cwd)
+                code, out, err = run_cli(
+                    ["agy", "--model", "gemini-3.8-flash-high", "--print", message],
+                    timeout=180,
+                    cwd=cwd
+                )
             except subprocess.TimeoutExpired:
-                return f"**agy timed out.**\n\nTry running `agy --print \"{message[:60]}\"` directly in `{cwd}`."
+                return f"**agy timed out.**\n\nTry running `agy --model gemini-3.8-flash-high --print \"{message[:60]}\"` directly in `{cwd}`."
             combined = ((err or "") + " " + (out or "")).strip()
             if code == 0:
                 return (out or "").strip() or f"**agy** (in {repo})\n\nProcessed your query."
