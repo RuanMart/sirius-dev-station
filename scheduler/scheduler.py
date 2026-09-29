@@ -78,6 +78,7 @@ def get_job_by_name(name: str) -> Optional[dict]:
 def run_skill(skill_name: str, trigger: str = "scheduler", input_text: str = ""):
     """Execute a skill via the API."""
     audit_file = BASE_DIR.parent / "audit" / "audit.log"
+    audit_file.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).isoformat()
     entry = {
         "action": "scheduler_run",

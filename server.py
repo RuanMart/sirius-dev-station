@@ -170,6 +170,7 @@ def get_timestamp():
 
 def append_audit(entry: dict):
     audit_file = BASE_DIR / "audit" / "audit.log"
+    audit_file.parent.mkdir(parents=True, exist_ok=True)
     entry["timestamp"] = get_timestamp()
     entry["id"] = str(uuid.uuid4())[:8]
     with open(audit_file, "a", encoding="utf-8") as f:
