@@ -246,11 +246,11 @@ def check_agent(name: str) -> dict:
         if name == "opencode":
             exists = shutil.which("opencode") is not None
             status = "online" if exists else "offline"
-            model = "deepseek-v4-flash-free"
+            model = "zai-coding-plan/glm-5.3-flash (max)"
         elif name == "hermes":
             exists = shutil.which("hermes") is not None
             status = "online" if exists else "offline"
-            model = "configured (Hermes)"
+            model = "glm-5.3-flash (max)"
         elif name == "agy":
             exists = shutil.which("agy") is not None
             status = "online" if exists else "offline"
@@ -1013,9 +1013,12 @@ def run_cli(args: list, timeout: int = 60, cwd: Optional[Path] = None) -> tuple:
             args,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=str(target_cwd),
-            shell=use_shell
+            shell=use_shell,
+            stdin=subprocess.DEVNULL
         )
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
@@ -1053,7 +1056,11 @@ def execute_agent(agent: str, message: str, repo: str = "sirius") -> str:
     try:
         if agent == "opencode":
             try:
-                code, out, err = run_cli(["opencode", "run", "--format", "json", message], timeout=90, cwd=cwd)
+                code, out, err = run_cli(
+                    ["opencode", "run", "-m", "zai-coding-plan/glm-5.3-flash", "--variant", "max", "--format", "json", message],
+                    timeout=180,
+                    cwd=cwd
+                )
             except subprocess.TimeoutExpired:
                 return f"⏱ Agent 'opencode' timed out on repo '{repo}'.\n\nTry running `opencode run \"{message[:60]}\"` directly in your terminal at `{cwd}`."
             if code == 0:

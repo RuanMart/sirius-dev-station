@@ -5,5 +5,5 @@
   "allowed_tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
   "max_turns": 50,
   "auto_approve": false,
-  "model": "deepseek-v4-flash-free"
+  "model": "zai-coding-plan/glm-5.3-flash"
 }

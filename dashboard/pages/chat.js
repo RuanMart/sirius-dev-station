@@ -18,14 +18,14 @@ async function renderChat() {
           <div class="agent-dot online"></div>
           <div>
             <div class="chat-agent-name">opencode</div>
-            <div class="chat-agent-desc">Code & DevOps</div>
+            <div class="chat-agent-desc">GLM 5.3 Flash (Max • Z.ai)</div>
           </div>
         </div>
         <div class="chat-agent" data-agent="hermes" onclick="selectAgent('hermes')">
           <div class="agent-dot online"></div>
           <div>
             <div class="chat-agent-name">Hermes</div>
-            <div class="chat-agent-desc">Memory & Scheduling</div>
+            <div class="chat-agent-desc">GLM 5.3 Flash (Max • Z.ai)</div>
           </div>
         </div>
         <div class="chat-agent" data-agent="agy" onclick="selectAgent('agy')">

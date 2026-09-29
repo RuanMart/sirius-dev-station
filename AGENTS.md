@@ -58,11 +58,11 @@ Your role is to act as the **kernel** of this system: route tasks to the right a
 
 ### Agent Responsibilities
 
-| Agent | Primary Role | When to Route |
-|-------|-------------|---------------|
-| **opencode** | Code generation, file operations, DevOps/GCP infra, git management, software engineering | Any task involving file edits, code writing, infrastructure-as-code, terminal commands for build/test |
-| **Hermes Agent** | Persistent memory (SQLite FTS5), cron scheduling, Telegram/Discord channels, skill hub, multi-agent coordination | Tasks needing cross-session memory, scheduled recurring tasks, multi-platform notifications, skill discovery |
-| **agy CLI** | Web research, multi-modal analysis (images/PDFs), reasoning, data analysis | Research tasks, content analysis, document understanding, competitive analysis, learning/research |
+| Agent | Model & Configuration | Primary Role | When to Route |
+|-------|-----------------------|-------------|---------------|
+| **opencode** | `zai-coding-plan/glm-5.3-flash` (variant: `max`) via Z.ai Coding Plan | Code generation, file operations, multi-repo dev, git management, software engineering | Any task involving file edits, code writing, multi-repo commits, terminal commands for build/test |
+| **Hermes Agent** | `glm-5.3-flash` (effort: `max`) via Z.ai Coding Plan (`zai`) | Persistent memory, cron scheduling, channels, skill hub, multi-agent coordination | Tasks needing cross-session memory, scheduled recurring tasks, multi-platform notifications, skill discovery |
+| **agy CLI** | `gemini-3.8-flash-high` (effort: `high`) via Google Antigravity | Web research, multi-modal analysis, architecture specs, BMAD planning | Research tasks, content analysis, document understanding, BMAD requirements and architecture |
 
 ### Routing Rules
 
