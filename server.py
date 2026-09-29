@@ -45,15 +45,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agentic OS", version="0.4.0", lifespan=lifespan)
 
-# Load OpenRouter API key from Hermes .env
-HERMES_ENV = Path.home() / ".hermes" / ".env"
-if HERMES_ENV.exists():
-    for line in HERMES_ENV.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            if k == "OPENROUTER_API_KEY":
-                os.environ[k] = v  # last value wins (matches shell sourcing)
+# Load API keys from Hermes .env, Windows AppData, or local .env
+env_candidates = [
+    Path.home() / ".hermes" / ".env",
+    Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / ".env" if os.environ.get("LOCALAPPDATA") else None,
+    BASE_DIR / ".env",
+]
+for env_path in env_candidates:
+    if env_path and env_path.exists():
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip("'\"")
+                if k not in os.environ:
+                    os.environ[k] = v
 
 # CORS for local dev
 app.add_middleware(
