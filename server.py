@@ -43,6 +43,14 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+BASE_DIR = Path(__file__).parent.resolve()
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / ".env")
+except Exception:
+    pass
+
 app = FastAPI(title="Agentic OS", version="0.4.0", lifespan=lifespan)
 
 # Load API keys from Hermes .env, Windows AppData, or local .env
@@ -86,14 +94,6 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(NoCacheMiddleware)
 
-BASE_DIR = Path(__file__).parent.resolve()
-
-# Load .env configuration
-try:
-    from dotenv import load_dotenv
-    load_dotenv(BASE_DIR / ".env")
-except Exception:
-    pass
 
 SIRIUS_ROOT_ENV = os.environ.get("SIRIUS_ROOT")
 if SIRIUS_ROOT_ENV:
