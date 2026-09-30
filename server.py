@@ -1313,6 +1313,8 @@ class RouterSuggest(BaseModel):
 class RouterRoute(BaseModel):
     task: str
     agent: str
+    execute: Optional[bool] = False
+    repo: Optional[str] = "sirius"
 
 # ─── Data Helpers ───────────────────────────────────────────────
 
@@ -1750,12 +1752,38 @@ def router_route(data: RouterRoute):
         if agent not in ["opencode", "hermes", "agy"]:
             return {"status": "error", "message": f"Invalid agent: {agent}"}
         append_audit({"action": "task_routed", "agent": agent, "task_preview": data.task[:50]})
-        return {
+        result = {
             "status": "routed",
             "agent": agent,
             "task": data.task,
             "message": f"Task routed to {agent}",
+            "executed": False,
         }
+        if data.execute:
+            target_repo = data.repo or "sirius"
+            user_msg = {
+                "id": str(uuid.uuid4())[:8],
+                "role": "user",
+                "agent": agent,
+                "repo": target_repo,
+                "content": data.task,
+                "timestamp": get_timestamp(),
+            }
+            save_chat_message(user_msg)
+            response_text = execute_agent(agent, data.task, repo=target_repo)
+            agent_msg = {
+                "id": str(uuid.uuid4())[:8],
+                "role": "assistant",
+                "agent": agent,
+                "repo": target_repo,
+                "content": response_text,
+                "timestamp": get_timestamp(),
+            }
+            save_chat_message(agent_msg)
+            result["executed"] = True
+            result["response"] = response_text
+            result["message"] = f"Task executed by {agent}"
+        return result
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

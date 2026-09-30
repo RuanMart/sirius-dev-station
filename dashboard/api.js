@@ -102,7 +102,7 @@ const api = {
   refreshAgentHealth: () => api.post('/api/agents/health/refresh', {}),
   // Smart Router
   suggestRouter: (task) => api.post('/api/router/suggest', { task }),
-  routeTask: (task, agent) => api.post('/api/router/route', { task, agent }),
+  routeTask: (task, agent, execute = false, repo = 'sirius') => api.post('/api/router/route', { task, agent, execute, repo }),
   // Learning Analytics
   getSkillAnalytics: () => api.get('/api/analytics/skills'),
   getTrendAnalytics: () => api.get('/api/analytics/trends'),
